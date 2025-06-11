@@ -1,67 +1,110 @@
+// New class: GameInitializer.cs
 using ChessGame.Classes;
 using ChessGame.interfaces;
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement.StartPanel;
 
 namespace ChessGame
 {
-	public partial class MainForm : Form
-	{
-		private IGameMediator _mediator;
-		private readonly string _userName;
-		private BoardPanel _boardPanel;
-		private NetworkClient _networkClient;
-		private bool _connected = false;
-		private CancellationTokenSource _cts = new();
+    public class GameInitializer
+    {
+        private readonly string _userName;
+        private readonly BoardPanel _boardPanel;
+        private NetworkClient _networkClient;
+        private IGameMediator _mediator;
+        private readonly CancellationTokenSource _cts;
+        private readonly Action onConnectionError;
+        private readonly Action onSuccess;
+
+        public GameInitializer(string userName, BoardPanel boardPanel, CancellationTokenSource cts, Action onSuccess, Action onConnectionError)
+        {
+            _userName = userName;
+            _boardPanel = boardPanel;
+            _cts = cts;
+            this.onSuccess = onSuccess;
+            this.onConnectionError = onConnectionError;
+        }
+
+        public IGameMediator Mediator => _mediator;
+        public NetworkClient NetworkClient => _networkClient;
+
+        public async Task InitializeAsync()
+        {
+            try
+            {
+                await Task.Run(() =>
+                {
+                    GameControler.Instance.StartGame();
+
+                    if (_cts.Token.IsCancellationRequested)
+                        return;
+
+                    _networkClient = new NetworkClient("127.0.0.1", 5000, _userName);
+
+                    if (_cts.Token.IsCancellationRequested)
+                    {
+                        _networkClient.Disconnect();
+                        return;
+                    }
+
+                    _mediator = new GameMediator(GameControler.Instance, _boardPanel, _networkClient, () => Application.OpenForms[0].Close());
+                }, _cts.Token);
+
+                onSuccess?.Invoke();
+            }
+            catch (Exception)
+            {
+                onConnectionError?.Invoke();
+            }
+        }
+    }
+}
 
 
-		public MainForm(string userName)
-		{
-			InitializeComponent();
-			_userName = userName;
-			_boardPanel = new BoardPanel();
-		}
+// Updated MainForm.cs
+using ChessGame.Classes;
+using ChessGame.interfaces;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+
+namespace ChessGame
+{
+    public partial class MainForm : Form
+    {
+        private IGameMediator _mediator;
+        private readonly string _userName;
+        private readonly BoardPanel _boardPanel;
+        private NetworkClient _networkClient;
+        private readonly CancellationTokenSource _cts = new();
+
+        public MainForm(string userName)
+        {
+            InitializeComponent();
+            _userName = userName;
+            _boardPanel = new BoardPanel();
+        }
 
         private async void MainForm_Load(object sender, EventArgs e)
         {
             loadingLabel.SafeInvoke(() => loadingLabel.Visible = true);
             AnimateLoadingLabel();
 
-            try
-            {
-                await InitializeGameAsync();
-                InitializeUIAfterConnection();
-            }
-            catch (OperationCanceledException)
-            {
-            }
-            catch (Exception ex)
-            {
-                HandleInitializationError(ex);
-            }
-        }
-        private async Task InitializeGameAsync()
-        {
-            await Task.Run(() =>
-            {
-                GameControler.Instance.StartGame();
+            var initializer = new GameInitializer(
+                _userName,
+                _boardPanel,
+                _cts,
+                onSuccess: InitializeUIAfterConnection,
+                onConnectionError: () => HandleInitializationError("ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ Ð¿Ñ–Ð´ÐºÐ»ÑŽÑ‡Ð¸Ñ‚Ð¸ÑÑ Ð´Ð¾ ÑÐµÑ€Ð²ÐµÑ€Ð°")
+            );
 
-                if (_cts.Token.IsCancellationRequested)
-                    return;
+            await initializer.InitializeAsync();
 
-                _networkClient = new NetworkClient("127.0.0.1", 5000, _userName);
-
-                if (_cts.Token.IsCancellationRequested)
-                {
-                    _networkClient.Disconnect(); // Ï³äêëþ÷åííÿ âæå áóëî, àëå ôîðìó çàêðèëè
-                    return;
-                }
-
-                _mediator = new GameMediator(GameControler.Instance, _boardPanel, _networkClient, () => this.SafeInvoke(Close));
-                _connected = true;
-            }, _cts.Token);
+            _networkClient = initializer.NetworkClient;
+            _mediator = initializer.Mediator;
         }
 
         private void InitializeUIAfterConnection()
@@ -74,67 +117,63 @@ namespace ChessGame
             });
         }
 
-        private void HandleInitializationError(Exception ex)
+        private void HandleInitializationError(string message)
         {
             this.SafeInvoke(() =>
             {
-                Console.WriteLine($"Connection error: {ex.Message}");
-                MessageBox.Show(ex.Message, "Ïîìèëêà", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(message, "ÐŸÐ¾Ð¼Ð¸Ð»ÐºÐ°", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 this.Close();
             });
         }
 
         private void InitializeLabels()
-		{
-			loadingLabel.Visible = false;
-			playerName_label.Text = "Ïðèâ³ò, " + _userName;
-			infoPanel.Visible = true;
-			player_side_label.Text = _networkClient.IsLocalPlayerWhite ? "Á³ë³" : "×îðí³";
-		}
+        {
+            loadingLabel.Visible = false;
+            playerName_label.Text = "ÐŸÑ€Ð¸Ð²Ñ–Ñ‚, " + _userName;
+            infoPanel.Visible = true;
+            player_side_label.Text = _networkClient.IsLocalPlayerWhite ? "Ð‘Ñ–Ð»Ñ–" : "Ð§Ð¾Ñ€Ð½Ñ–";
+        }
 
-		private async void AnimateLoadingLabel()
-		{
-			while (loadingLabel.Visible)
-			{
-				for (int i = 0; i <= 3; i++)
-				{
-					loadingLabel.SafeInvoke(() => loadingLabel.Text = "Ïîøóê ãðàâöÿ" + new string('.', i));
-					await Task.Delay(500);
-				}
-			}
-		}
+        private async void AnimateLoadingLabel()
+        {
+            while (loadingLabel.Visible)
+            {
+                for (int i = 0; i <= 3; i++)
+                {
+                    loadingLabel.SafeInvoke(() => loadingLabel.Text = "ÐŸÐ¾ÑˆÑƒÐº Ð³Ñ€Ð°Ð²Ñ†Ñ" + new string('.', i));
+                    await Task.Delay(500);
+                }
+            }
+        }
 
-		private void SetupEventHandlers()
-		{
-			_networkClient.OpponentNameReceived += name =>
-			{
-				loadingLabel.Visible = false;
-				oponentName_label.Text = "Òè ãðàºø ïðîòè " + name;
-			};
+        private void SetupEventHandlers()
+        {
+            _networkClient.OpponentNameReceived += name =>
+            {
+                loadingLabel.Visible = false;
+                oponentName_label.Text = "Ð¢Ð¸ Ð³Ñ€Ð°Ñ”Ñˆ Ð¿Ñ€Ð¾Ñ‚Ð¸ " + name;
+            };
 
-			GameControler.Instance.OnSideChanged += () =>
-			{
-				curSide_label.SafeInvoke(() =>
-				{
-					curSide_label.Text = GameControler.Instance.IsWhiteTurn ? "Á³ë³" : "×îðí³";
-				});
-			};
+            GameControler.Instance.OnSideChanged += () =>
+            {
+                curSide_label.SafeInvoke(() =>
+                {
+                    curSide_label.Text = GameControler.Instance.IsWhiteTurn ? "Ð‘Ñ–Ð»Ñ–" : "Ð§Ð¾Ñ€Ð½Ñ–";
+                });
+            };
+        }
 
-		}
+        private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            _cts.Cancel();
 
-		private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
-		{
-			_cts.Cancel();
+            _mediator?.Disconnect();
+            _networkClient?.Disconnect();
+        }
 
-			if (_mediator != null)
-				_mediator.Disconnect();
-			else if (_connected && _networkClient != null)
-				_networkClient.Disconnect();
-		}
-
-		private void btn_exit_Click(object sender, EventArgs e)
-		{
-			this.Close();
-		}
-	}
+        private void btn_exit_Click(object sender, EventArgs e)
+        {
+            this.Close();
+        }
+    }
 }
